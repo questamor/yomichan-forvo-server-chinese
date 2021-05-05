@@ -1,5 +1,6 @@
 # Fork of jamesnicolas/yomichan-forvo-server for Chinese
 
+Requires Anki to be installed and running.  
 Copy this repository into a new folder in `%AppData%\Anki2\addons21`
 
 # Yomichan Forvo Server for Anki
