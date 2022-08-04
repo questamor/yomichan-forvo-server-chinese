@@ -24,3 +24,4 @@ Install:
 6. In your Audio Sources list below, make sure one of them is set to Custom
 
 Now when you scan a word in Yomichan, you should be able to right click the audio icon and the Forvo custom audio sources should appear.
+

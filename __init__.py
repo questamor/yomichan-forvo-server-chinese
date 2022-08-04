@@ -24,7 +24,7 @@ class Forvo():
     def __init__(self, language):
         self.language = language
         self._set_session()
-    
+
     def _set_session(self):
         """
         Sets the session with basic backoff retries.
@@ -54,12 +54,12 @@ class Forvo():
         """
         url = self._SERVER_HOST + path
         try:
-            return self.session.get(url, timeout=1).text
+            return self.session.get(url, timeout=10).text
 
         except Exception:
             self._set_session()
-            return self.session.get(url, timeout=1).text
-    
+            return self.session.get(url, timeout=10).text
+
     def word(self, w):
         """
         Scrape forvo's word page for audio sources
@@ -77,7 +77,7 @@ class Forvo():
         #       <ul class="show-all-pronunciations">
         #           <li>
         #              <span class="play" onclick"(some javascript to play the word audio)"></span>
-        #                "Pronunciation by <span><a href="/username/link">skent</a></span>" 
+        #                "Pronunciation by <span><a href="/username/link">skent</a></span>"
         #              <div class="more">...</div>
         #           </li>
         #       </ul>
@@ -89,7 +89,7 @@ class Forvo():
         results = soup.select('#language-container-zh>article>ul.show-all-pronunciations>li:not(.li-ad)')
         audio_sources = []
         for i in results:
-            url = self._extract_url(i.span)
+            url = self._extract_url(i.div)
 
             # Capture the username of the user
             # Some users have deleted accounts which is why can't just parse it from the <a> tag
@@ -98,8 +98,8 @@ class Forvo():
         return audio_sources
 
     @classmethod
-    def _extract_url(cls, span):
-        play = span['onclick']
+    def _extract_url(cls, element):
+        play = element['onclick']
         # We are interested in Forvo's javascript Play function which takes in some parameters to play the audio
         # Example: Play(786514,'OTA3Mjk2Ny83Ni85MDcyOTY3Xzc2XzExNDk0NzNfMS5tcDM=',...);return false;
         # Match anything that isn't commas, parentheses or quotes to capture the function arguments
@@ -111,7 +111,7 @@ class Forvo():
         file = base64.b64decode(play_args[2]).decode("utf-8")
         url = f"{cls._AUDIO_HTTP_HOST}/mp3/{file}"
         return url
-    
+
     def search(self, s):
         """
         Scrape Forvo's search page for audio sources. Note that the search page omits the username
@@ -127,7 +127,7 @@ class Forvo():
         # <ul class="word-play-list-icon-size-l">
         #   <li><span class="play" onclick"(some javascript to play the word audio)"></li>
         # </ul>
-        results = soup.select('ul.word-play-list-icon-size-l>li>span.play')
+        results = soup.select('ul.word-play-list-icon-size-l>li>div.play')
         audio_sources = []
         for i in results:
             url = self._extract_url(i)
@@ -149,13 +149,15 @@ class ForvoHandler(http.server.SimpleHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        self.send_response(HTTPStatus.OK) 
-        self.send_header("Content-type", "application/json")
-        self.end_headers()
-
-        # Extract 'expression' and 'reading' query parameters
+        # Extract 'term' and 'reading' query parameters
         query_components = parse_qs(urlparse(self.path).query)
+        term = query_components["term"][0] if "term" in query_components else ""
+
+        # Yomichan used to use "expression" but renamed to term. Still support "expression" for older versions
         expression = query_components["expression"][0] if "expression" in query_components else ""
+        if term == "":
+            term = expression
+
         reading = query_components["reading"][0] if "reading" in query_components else ""
         debug = query_components["debug"][0] if "debug" in query_components else False
 
@@ -164,26 +166,26 @@ class ForvoHandler(http.server.SimpleHTTPRequestHandler):
                 "debug":True
             }
             debug_resp['reading'] = reading
-            debug_resp['expression'] = expression
-            debug_resp['word.expression'] = self.forvo.word(expression)
+            debug_resp['term'] = term
+            debug_resp['word.term'] = self.forvo.word(term)
             debug_resp['word.reading'] = self.forvo.word(reading)
-            debug_resp['search.expression'] = self.forvo.search(expression)
+            debug_resp['search.term'] = self.forvo.search(term)
             debug_resp['search.reading'] = self.forvo.search(reading)
             self.wfile.write(bytes(json.dumps(debug_resp), "utf8"))
             return
 
         audio_sources = []
-        
-        # Try looking for word sources for 'expression' first
-        audio_sources = self.forvo.word(expression)
+
+        # Try looking for word sources for 'term' first
+        audio_sources = self.forvo.word(term)
 
         # Try looking for word sources for 'reading'
         if len(audio_sources) == 0:
             audio_sources += self.forvo.word(reading)
-        
+
         # Finally use forvo search to look for similar words
         if len(audio_sources) == 0:
-            audio_sources += self.forvo.search(expression)
+            audio_sources += self.forvo.search(term)
 
         if len(audio_sources) == 0:
             audio_sources += self.forvo.search(reading)
@@ -194,8 +196,17 @@ class ForvoHandler(http.server.SimpleHTTPRequestHandler):
             "type": "audioSourceList",
             "audioSources": audio_sources
         }
+
         # Writing the JSON contents with UTF-8
-        self.wfile.write(bytes(json.dumps(resp), "utf8"))
+        payload = bytes(json.dumps(resp), "utf8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-type", "application/json")
+        self.send_header("Content-length", str(len(payload)))
+        self.end_headers()
+        try:
+            self.wfile.write(payload)
+        except BrokenPipeError:
+            self.log_error("BrokenPipe when sending reply")
 
         return
 
